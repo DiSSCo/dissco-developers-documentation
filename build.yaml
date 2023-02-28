@@ -1,0 +1,90 @@
+name: Build
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [ opened, synchronize, reopened ]
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+      - name: Set up JDK 17
+        uses: actions/setup-java@v1
+        with:
+          java-version: 17
+      - name: Cache SonarCloud packages
+        uses: actions/cache@v1
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+      - name: Cache Maven packages
+        uses: actions/cache@v1
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+      - name: Build and analyze
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Needed to get PR information, if any
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
+          -Dsonar.projectKey=DiSSCo_${{ github.event.repository.name }}
+          -Dsonar.exclusions=**/jooq/**
+          -Dsonar.coverage.exclusions=**/properties/**,**/configuration/**,**/domain/**,**/exception/**
+      - name: Build Docker Image
+        run: |
+          docker build -t docker.io/dissco/handle-manager:${{ github.sha }} .
+      - name: Trivy - List all vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'docker.io/dissco/handle-manager:${{ github.sha }}'
+          format: 'table'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+      - name: Trivy - Stop on Severe Vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'docker.io/dissco/handle-manager:${{ github.sha }}'
+          format: 'table'
+          ignore-unfixed: true
+          trivyignores: .github/workflows/.trivyignore
+          exit-code: '1'
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+      - name: Login to Public ECR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v1
+        with:
+          registry: public.ecr.aws
+          username: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          password: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: public.ecr.aws/dissco/${{ github.event.repository.name }}
+          tags: |
+            type=sha
+            type=raw,value=latest
+      - name: Build and push
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      - name: Set outputs
+        id: vars
+        run: echo "::set-output name=sha_short::$(git rev-parse --short HEAD)"
+      - name: Push tag
+        if: github.event_name != 'pull_request'
+        uses: anothrNick/github-tag-action@1.36.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CUSTOM_TAG: sha-${{ steps.vars.outputs.sha_short }}
