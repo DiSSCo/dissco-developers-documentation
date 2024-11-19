@@ -4,7 +4,7 @@ on:
     branches:
       - main
   pull_request:
-    types: [ opened, synchronize, reopened ]
+    types: [opened, synchronize, reopened]
 jobs:
   build:
     name: Build
@@ -33,30 +33,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Needed to get PR information, if any
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
-          -Dsonar.projectKey=DiSSCo_${{ github.event.repository.name }}
-          -Dsonar.exclusions=**/jooq/**
-          -Dsonar.coverage.exclusions=**/properties/**,**/configuration/**,**/domain/**,**/exception/**
-      - name: Build Docker Image
-        run: |
-          docker build -t docker.io/dissco/handle-manager:${{ github.sha }} .
-      - name: Trivy - List all vulnerabilities
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: 'docker.io/dissco/handle-manager:${{ github.sha }}'
-          format: 'table'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-      - name: Trivy - Stop on Severe Vulnerabilities
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: 'docker.io/dissco/handle-manager:${{ github.sha }}'
-          format: 'table'
-          ignore-unfixed: true
-          trivyignores: .github/workflows/.trivyignore
-          exit-code: '1'
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
+        run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar 
+                  -Dsonar.projectKey=DiSSCo_${{ github.event.repository.name }}
+                  -Dsonar.exclusions=**/jooq/**
+                  -Dsonar.coverage.exclusions=**/properties/**,**/configuration/**,**/maven/**
       - name: Login to Public ECR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v1
@@ -64,11 +44,38 @@ jobs:
           registry: public.ecr.aws
           username: ${{ secrets.AWS_ACCESS_KEY_ID }}
           password: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Build image
+        run: |
+          docker build -t ${{ github.event.repository.name }} .
+      - name: Trivy - List all vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ github.event.repository.name }}'
+          format: 'table'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+        env:
+          TRIVY_SKIP_DB_UPDATE: true
+          TRIVY_SKIP_JAVA_DB_UPDATE: true
+      - name: Trivy - Stop on Severe Vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        if: github.event_name == 'pull_request'
+        with:
+          image-ref: '${{ github.event.repository.name }}'
+          format: 'table'
+          ignore-unfixed: true
+          trivyignores: .github/workflows/.trivyignore
+          exit-code: '1'
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+        env:
+          TRIVY_SKIP_DB_UPDATE: true
+          TRIVY_SKIP_JAVA_DB_UPDATE: true
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v4
         with:
-          images: public.ecr.aws/dissco/${{ github.event.repository.name }}
+          images: public.ecr.aws/m8w1i6p4/${{ github.event.repository.name }}
           tags: |
             type=sha
             type=raw,value=latest
